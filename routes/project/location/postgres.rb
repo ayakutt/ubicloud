@@ -258,7 +258,7 @@ class Clover
 
           DB.transaction do
             md = PostgresMetricDestination.create(postgres_resource_id: pg.id, url:, username:, password:)
-            pg.servers.each(&:incr_configure_metrics)
+            pg.incr_configure_metrics
             audit_log(md, "create", pg)
           end
 
@@ -276,7 +276,7 @@ class Clover
           if (md = pg.metric_destinations_dataset[id:])
             DB.transaction do
               md.destroy
-              pg.servers.each(&:incr_configure_metrics)
+              pg.incr_configure_metrics
               audit_log(md, "destroy")
             end
           else
@@ -289,6 +289,44 @@ class Clover
           else
             204
           end
+        end
+      end
+
+      r.on "log-destination" do
+        r.post true do
+          authorize("Postgres:edit", pg)
+
+          name, host = typecast_params.nonempty_str!(["name", "host"])
+          port = typecast_params.pos_int!("port")
+          unless (1..65535).cover?(port)
+            fail CloverError.new(400, "InvalidRequest", "port must be between 1 and 65535")
+          end
+
+          structured_data = typecast_params.Hash("structured_data")
+
+          DB.transaction do
+            ld = PostgresLogDestination.create(postgres_resource_id: pg.id, name:, host:, port:, structured_data:)
+            pg.incr_configure_logs
+            audit_log(ld, "create", pg)
+          end
+
+          Serializers::Postgres.serialize(pg, {detailed: true})
+        end
+
+        r.delete :ubid_uuid do |id|
+          authorize("Postgres:edit", pg)
+
+          if (ld = pg.log_destinations_dataset[id:])
+            DB.transaction do
+              ld.destroy
+              pg.incr_configure_logs
+              audit_log(ld, "destroy")
+            end
+          else
+            no_audit_log
+          end
+
+          204
         end
       end
 
@@ -533,7 +571,7 @@ class Clover
               .exclude(cert_auth_users.contains([name]))
               .update(cert_auth_users: cert_auth_users.concat([name]))
             if n == 1
-              pg.servers.each(&:incr_configure)
+              pg.incr_configure
               audit_log(pg, "add_cert_auth_user")
               pg.refresh
             else
@@ -551,7 +589,7 @@ class Clover
               .where(cert_auth_users.contains([name]))
               .update(cert_auth_users: cert_auth_users - name)
             if n == 1
-              pg.servers.each(&:incr_configure)
+              pg.incr_configure
               audit_log(pg, "remove_cert_auth_user")
               pg.refresh
             else
@@ -709,7 +747,7 @@ class Clover
           old_pg_config = pg.user_config
           pg.update(user_config: pg_config, pgbouncer_user_config: pgbouncer_config)
 
-          pg.servers.each(&:incr_configure)
+          pg.incr_configure
 
           audit_log(pg, "update_config")
 

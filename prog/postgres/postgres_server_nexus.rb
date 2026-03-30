@@ -831,8 +831,7 @@ SQL
     case vm.sshable.d_check("promote_postgres")
     when "Succeeded"
       vm.sshable.d_clean("promote_postgres")
-      resource.servers.each(&:incr_configure)
-      resource.servers.each(&:incr_configure_metrics)
+      server_incr("configure", "configure_metrics", "configure_logs")
       hop_configure
     when "NotStarted", "Failed"
       vm.sshable.d_run("promote_postgres", "sudo", "postgres/bin/promote", postgres_server.version)

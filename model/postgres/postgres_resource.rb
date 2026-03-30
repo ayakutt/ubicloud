@@ -232,6 +232,18 @@ class PostgresResource < Sequel::Model
     servers.any? { it.taking_over? }
   end
 
+  def incr_configure
+    Semaphore.incr(servers_dataset.select(:id), "configure")
+  end
+
+  def incr_configure_logs
+    Semaphore.incr(servers_dataset.select(:id), "configure_logs")
+  end
+
+  def incr_configure_metrics
+    Semaphore.incr(servers_dataset.select(:id), "configure_metrics")
+  end
+
   def incr_restart
     Semaphore.incr(servers_dataset.select(:id), "restart")
   end
