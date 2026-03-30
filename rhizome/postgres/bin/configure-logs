@@ -1,0 +1,49 @@
+#!/bin/env ruby
+# frozen_string_literal: true
+
+require "json"
+require_relative "../../common/lib/util"
+require_relative "../lib/otel_log_config"
+
+config = JSON.parse($stdin.read)
+instance = config["instance"]
+server_role = config["server_role"]
+version = config["version"]
+log_destinations = config["log_destinations"] || []
+
+if log_destinations.empty?
+  r "systemctl", "stop", "otelcol-contrib"
+  r "systemctl", "disable", "otelcol-contrib"
+  exit 0
+end
+
+log_dir = "/dat/#{version}/data/pg_log"
+
+log_config = OtelLogConfig.new(
+  instance: instance,
+  server_role: server_role,
+  log_dir: log_dir,
+  log_destinations: log_destinations,
+)
+
+r "mkdir", "-p", "/etc/otelcol-contrib", "/var/lib/otelcol-contrib/state", "/tmp/otelcol"
+otelcol_user = "otelcol-contrib"
+
+r "chown", "-R", otelcol_user, "/var/lib/otelcol-contrib/state", "/etc/otelcol-contrib", "/tmp/otelcol"
+r "usermod", "-aG", "systemd-journal", otelcol_user
+
+# Grant traverse on /dat and each intermediate directory down to the log dir
+r "setfacl", "-m", "u:#{otelcol_user}:x", "/dat"
+r "setfacl", "-m", "u:#{otelcol_user}:x", "/dat/#{version}"
+r "setfacl", "-m", "u:#{otelcol_user}:x", "/dat/#{version}/data"
+
+# Grant read on existing log files, read+traverse on the log dir itself,
+# and a default ACL so new files PostgreSQL creates are automatically readable
+r "setfacl", "-Rm", "u:#{otelcol_user}:r", log_dir
+r "setfacl", "-m", "u:#{otelcol_user}:rx", log_dir
+r "setfacl", "-d", "-m", "u:#{otelcol_user}:r", log_dir
+
+safe_write_to_file("/etc/otelcol-contrib/config.yaml", log_config.to_config)
+
+r "systemctl", "enable", "otelcol-contrib", "--now"
+r "systemctl", "reload-or-restart", "otelcol-contrib"
