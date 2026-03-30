@@ -380,8 +380,7 @@ TIMER
       vm.sshable.cmd("sudo systemctl enable --now pg-collect-metrics.timer")
       vm.sshable.cmd("sudo systemctl enable --now wal-g") if postgres_server.timeline.blob_storage && !resource.use_old_walg_command_set?
 
-      hop_setup_cloudwatch if postgres_server.timeline.aws? && resource.project.get_ff_aws_cloudwatch_logs
-      hop_setup_hugepages
+      hop_configure_logs
     end
 
     vm.sshable.cmd("sudo systemctl reload postgres_exporter || sudo systemctl restart postgres_exporter")
@@ -389,6 +388,21 @@ TIMER
     vm.sshable.cmd("sudo systemctl reload prometheus || sudo systemctl restart prometheus")
 
     hop_wait
+  end
+
+  label def configure_logs
+    case vm.sshable.d_check("configure_logs")
+    when "Succeeded"
+      vm.sshable.d_clean("configure_logs")
+      when_initial_provisioning_set? do
+        hop_setup_cloudwatch if postgres_server.timeline.aws? && resource.project.get_ff_aws_cloudwatch_logs
+        hop_setup_hugepages
+      end
+      hop_wait
+    when "Failed", "NotStarted"
+      vm.sshable.d_run("configure_logs", "/home/ubi/postgres/bin/configure-logs", stdin: postgres_server.logs_config.to_json)
+    end
+    nap 5
   end
 
   label def setup_cloudwatch
@@ -632,6 +646,11 @@ SQL
       hop_configure_metrics
     end
 
+    when_configure_logs_set? do
+      decr_configure_logs
+      hop_configure_logs
+    end
+
     when_promote_read_replica_set? do
       decr_promote_read_replica
       register_deadline("wait", 10 * 60)
@@ -826,7 +845,7 @@ SQL
     if postgres_server.read_replica?
       resource.representative_server.update(is_representative: false)
       postgres_server.reload.update(is_representative: true, synchronization_status: "ready")
-      resource.servers.each(&:incr_configure_metrics)
+      server_incr("configure_metrics", "configure_logs")
       resource.incr_refresh_dns_record
       hop_configure
     end
@@ -838,9 +857,7 @@ SQL
       resource.representative_server.incr_destroy
       postgres_server.update(timeline_access: "push", is_representative: true, synchronization_status: "ready")
       resource.incr_refresh_dns_record
-      resource.servers.each(&:incr_configure)
-      resource.servers.each(&:incr_configure_metrics)
-      resource.servers.each(&:incr_restart)
+      server_incr("configure", "configure_metrics", "configure_logs", "restart")
       resource.servers.reject(&:primary?).each { it.update(synchronization_status: "catching_up") }
       hop_configure
     when "Failed"
@@ -915,5 +932,12 @@ SQL
     end
 
     false
+  end
+
+  def server_incr(*semaphores)
+    server_ids = resource.servers.map(&:id)
+    semaphores.each do
+      Semaphore.incr(server_ids, it)
+    end
   end
 end
