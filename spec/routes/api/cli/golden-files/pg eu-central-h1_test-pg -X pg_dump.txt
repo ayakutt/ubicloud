@@ -13,6 +13,7 @@ Post Commands:
     add-cert-auth-user                 Add user to list of users authenticating with client certificate authentication
     add-config-entries                 Add configuration entries to a PostgreSQL database
     add-firewall-rule                  Add a PostgreSQL firewall rule
+    add-log-destination                Add a PostgreSQL log destination
     add-metric-destination             Add a PostgreSQL metric destination
     add-pgbouncer-config-entries       Add pgbouncer configuration entries to a PostgreSQL database
     ca-certificates                    Print CA certificates for a PostgreSQL database
@@ -20,6 +21,7 @@ Post Commands:
     create-client-cert-keypair         Create client certificate keypair with given common name, expiring after a duration of seconds
     create-read-replica                Create a read replica for a PostgreSQL database
     delete-firewall-rule               Delete a PostgreSQL firewall rule
+    delete-log-destination             Delete a PostgreSQL log destination
     delete-metric-destination          Delete a PostgreSQL metric destination
     destroy                            Destroy a PostgreSQL database
     list-backups                       List backups for a PostgreSQL database

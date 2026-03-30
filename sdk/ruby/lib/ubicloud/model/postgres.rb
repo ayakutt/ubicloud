@@ -6,7 +6,7 @@ module Ubicloud
 
     set_fragment "postgres"
 
-    set_columns :id, :name, :state, :location, :vm_size, :storage_size_gib, :version, :target_version, :ha_type, :flavor, :ca_certificates, :connection_string, :primary, :firewall_rules, :metric_destinations, :tags, :maintenance_window_start_at, :read_replica, :parent, :read_replicas
+    set_columns :id, :name, :state, :location, :vm_size, :storage_size_gib, :version, :target_version, :ha_type, :flavor, :ca_certificates, :connection_string, :primary, :firewall_rules, :metric_destinations, :log_destinations, :tags, :maintenance_window_start_at, :read_replica, :parent, :read_replicas
 
     def self._convert_tags_in_params_from_hash_to_array(params)
       if params[:tags]
@@ -69,6 +69,30 @@ module Ubicloud
       self[:metric_destinations]&.<<(md)
 
       md
+    end
+
+    # Add a log destination for this database with the given name, host, and port.
+    # Optionally pass structured_data as a hash of SD-ID => {param => value} for
+    # providers that require SD-based authentication (e.g. Honeybadger, Mezmo).
+    # Returns the serialized postgres resource.
+    def add_log_destination(name:, host:, port:, structured_data: nil)
+      params = {name:, host:, port:, structured_data:}
+      params.compact!
+      ld = adapter.post(_path("/log-destination"), **params)
+
+      self[:log_destinations]&.<<(ld)
+
+      ld
+    end
+
+    # Delete the log destination with the given id.  Returns nil.
+    def delete_log_destination(ld_id)
+      check_no_slash(ld_id, "invalid log destination id format")
+      adapter.delete(_path("/log-destination/#{ld_id}"))
+
+      self[:log_destinations]&.delete_if { it[:id] == ld_id }
+
+      nil
     end
 
     # Delete the metric destination with the given id.  Returns nil.

@@ -277,6 +277,22 @@ class UbiCli
     end
   end
 
+  def structured_data_args_to_hash(args, cmd)
+    result = {}
+    args.each do |arg|
+      unless arg.include?("/")
+        raise Rodish::CommandFailure.new("invalid structured_data argument, expected sd-id/key=value format: #{arg.inspect}", cmd)
+      end
+      sd_id, rest = arg.split("/", 2)
+      unless rest.include?("=")
+        raise Rodish::CommandFailure.new("invalid structured_data argument, expected sd-id/key=value format: #{arg.inspect}", cmd)
+      end
+      key, value = rest.split("=", 2)
+      (result[sd_id] ||= {})[key] = value
+    end
+    result.empty? ? nil : result
+  end
+
   def handle_ssh(opts)
     vm = sdk_object.info
     opts = opts[:vm_ssh]
