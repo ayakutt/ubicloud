@@ -44,6 +44,18 @@ RSpec.describe KubernetesCluster do
     expect(kc.display_state).to eq "deleting"
   end
 
+  describe "#available_upgrade_version" do
+    it "returns upgrade version when available" do
+      kc.update(version: "v1.33")
+      expect(kc.available_upgrade_version).to eq("v1.34")
+    end
+
+    it "returns nil when on latest version" do
+      kc.update(version: "v1.34")
+      expect(kc.available_upgrade_version).to be_nil
+    end
+  end
+
   it "initiates a new health monitor session" do
     sshable = Sshable.new
     expect(kc).to receive(:sshable).and_return(sshable)

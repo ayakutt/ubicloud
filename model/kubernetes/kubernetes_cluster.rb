@@ -110,6 +110,10 @@ class KubernetesCluster < Sequel::Model
     [extra_ports, missing_ports]
   end
 
+  def available_upgrade_version
+    Option.kubernetes_upgrade_candidate(version)
+  end
+
   def cluster_health_report
     return unless connectivity_check_target
 
