@@ -31,10 +31,49 @@ RSpec.describe KubernetesCluster do
   end
 
   it "#display_state shows appropriate state" do
+    np = Prog::Kubernetes::KubernetesNodepoolNexus.assemble(name: "np", node_count: 1, kubernetes_cluster_id: kc.id).subject
+
     kc.strand.update(label: "wait")
+    np.strand.update(label: "wait")
+    kc.reload
     expect(kc.display_state).to eq "running"
+
     kc.strand.update(label: "start")
+    kc.reload
     expect(kc.display_state).to eq "creating"
+
+    kc.strand.update(label: "upgrade")
+    np.strand.update(label: "wait")
+    kc.reload
+    expect(kc.display_state).to eq "upgrading"
+
+    kc.strand.update(label: "wait_upgrade")
+    kc.reload
+    expect(kc.display_state).to eq "upgrading"
+
+    kc.strand.update(label: "wait")
+    np.strand.update(label: "upgrade")
+    kc.reload
+    np.reload
+    expect(kc.display_state).to eq "upgrading"
+
+    np.strand.update(label: "wait_upgrade")
+    kc.reload
+    np.reload
+    expect(kc.display_state).to eq "upgrading"
+
+    np.strand.update(label: "wait")
+    kc.incr_upgrade
+    kc.reload
+    expect(kc.display_state).to eq "upgrading"
+    Semaphore.where(strand_id: kc.id, name: "upgrade").destroy
+
+    np.incr_upgrade
+    kc.reload
+    np.reload
+    expect(kc.display_state).to eq "upgrading"
+    Semaphore.where(strand_id: np.id, name: "upgrade").destroy
+
     kc.incr_destroy
     kc.reload
     expect(kc.display_state).to eq "deleting"
