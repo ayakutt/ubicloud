@@ -15,7 +15,7 @@ class Prog::Test::Kubernetes < Prog::Test::Base
       stack: [{
         "kubernetes_service_project_id" => kubernetes_service_project.id,
         "kubernetes_test_project_id" => kubernetes_test_project.id,
-        "migration_number" => 0,
+        "migration_number" => 1,
       }],
     )
   end
