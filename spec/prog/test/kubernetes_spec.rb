@@ -24,7 +24,7 @@ RSpec.describe Prog::Test::Kubernetes do
       cp_node_count: 1,
       target_node_size: "standard-2",
     ).subject
-    KubernetesNodepool.create(name: "test-cluster-np", node_count: 1, kubernetes_cluster_id: kc.id, target_node_size: "standard-2")
+    Prog::Kubernetes::KubernetesNodepoolNexus.assemble(name: "test-cluster-np", node_count: 1, kubernetes_cluster_id: kc.id, target_node_size: "standard-2")
     allow(kc).to receive(:client).and_return(Kubernetes::Client.new(kc, session))
     kc
   }
@@ -774,7 +774,7 @@ RSpec.describe Prog::Test::Kubernetes do
       expect { kubernetes_test.verify_reboot_nftables }.to nap(5)
     end
 
-    it "hops to destroy_kubernetes when rules match" do
+    it "hops to delete_statefulset when rules match" do
       kubernetes_test.update_stack({
         "reboot_node_id" => node.id,
         "nat_rules_before_reboot" => "table ip nat { ... }",
@@ -784,7 +784,7 @@ RSpec.describe Prog::Test::Kubernetes do
       expect(sshable).to receive(:_cmd).with("uptime").and_return("up")
       expect(sshable).to receive(:_cmd).with("sudo nft list chain ip nat postrouting").and_return("table ip nat { ... }")
       expect(sshable).to receive(:_cmd).with("sudo nft list chain ip6 pod_access ingress_egress_control").and_return("table ip6 pod_access { ... }")
-      expect { kubernetes_test.verify_reboot_nftables }.to hop("destroy_kubernetes")
+      expect { kubernetes_test.verify_reboot_nftables }.to hop("delete_statefulset")
     end
 
     it "sets fail_message when ip nat rules changed" do
@@ -811,8 +811,143 @@ RSpec.describe Prog::Test::Kubernetes do
       expect(sshable).to receive(:_cmd).with("uptime").and_return("up")
       expect(sshable).to receive(:_cmd).with("sudo nft list chain ip nat postrouting").and_return("table ip nat { ... }")
       expect(sshable).to receive(:_cmd).with("sudo nft list chain ip6 pod_access ingress_egress_control").and_return("different pod_access rules")
-      expect { kubernetes_test.verify_reboot_nftables }.to hop("destroy_kubernetes")
+      expect { kubernetes_test.verify_reboot_nftables }.to hop("delete_statefulset")
       expect(kubernetes_test.strand.stack.first["fail_message"]).to eq("ip6 pod_access rules changed after reboot")
+    end
+  end
+
+  describe "#delete_statefulset" do
+    before do
+      expect(kubernetes_test).to receive(:kubernetes_cluster).and_return(kubernetes_cluster).at_least(:once)
+    end
+
+    it "deletes the statefulset and pvc and hops to test_upgrade" do
+      response = Net::SSH::Connection::Session::StringWithExitstatus.new("", 0)
+      expect(session).to receive(:_exec!).with("sudo kubectl --kubeconfig=/etc/kubernetes/admin.conf delete statefulset ubuntu-statefulset --wait=false --ignore-not-found").and_return(response)
+      expect(session).to receive(:_exec!).with("sudo kubectl --kubeconfig=/etc/kubernetes/admin.conf delete pvc data-volume-ubuntu-statefulset-0 --wait=false --ignore-not-found").and_return(response)
+      expect { kubernetes_test.delete_statefulset }.to hop("test_upgrade")
+    end
+  end
+
+  describe "#test_upgrade" do
+    before do
+      expect(kubernetes_test).to receive(:kubernetes_cluster).and_return(kubernetes_cluster).at_least(:once)
+    end
+
+    it "fails if no upgrade candidate is available" do
+      kubernetes_cluster.update(version: Option.kubernetes_versions.first)
+      expect { kubernetes_test.test_upgrade }.to hop("destroy_kubernetes")
+      expect(kubernetes_test.strand.stack.first["fail_message"]).to eq("No upgrade candidate available")
+    end
+
+    it "updates version, increments uprades semaphores, and hops to wait_for_upgrade" do
+      target_version = kubernetes_cluster.available_upgrade_version
+      expect { kubernetes_test.test_upgrade }.to hop("wait_for_upgrade")
+
+      kubernetes_cluster.reload
+      expect(kubernetes_cluster.version).to eq(target_version)
+      expect(kubernetes_cluster.upgrade_set?).to be true
+      expect(kubernetes_cluster.nodepools(reload: true).first.upgrade_set?).to be true
+    end
+  end
+
+  describe "#wait_for_upgrade" do
+    before do
+      expect(kubernetes_test).to receive(:kubernetes_cluster).and_return(kubernetes_cluster).at_least(:once)
+      cp_vm = create_vm(name: "cp-node")
+      Sshable.create_with_id(cp_vm.id)
+      KubernetesNode.create(vm_id: cp_vm.id, kubernetes_cluster_id: kubernetes_cluster.id)
+      wo_vm = create_vm(name: "wo-node")
+      Sshable.create_with_id(wo_vm.id)
+      KubernetesNode.create(vm_id: wo_vm.id, kubernetes_cluster_id: kubernetes_cluster.id, kubernetes_nodepool_id: kubernetes_cluster.nodepools.first.id)
+      lb = LoadBalancer.create(private_subnet_id: private_subnet.id, name: "api-lb", health_check_endpoint: "/healthz", project_id: kubernetes_test_project.id)
+      kubernetes_cluster.update(api_server_lb_id: lb.id)
+    end
+
+    it "naps and skips host entry update if vm is not ready" do
+      (kubernetes_cluster.nodes + kubernetes_cluster.nodepools.first.nodes).each do |node|
+        expect(node.vm.sshable).to receive(:_cmd).with("uptime").and_raise(StandardError)
+      end
+      expect { kubernetes_test.wait_for_upgrade }.to nap(15)
+    end
+
+    it "naps and skips host entry update if host entry is already set" do
+      kubernetes_test.set_node_entries_status(kubernetes_cluster.nodes.first.name)
+      kubernetes_test.set_node_entries_status(kubernetes_cluster.nodepools.first.nodes.first.name)
+      expect(kubernetes_test).not_to receive(:vm_ready?)
+      expect(kubernetes_test).not_to receive(:ensure_hosts_entry)
+      expect { kubernetes_test.wait_for_upgrade }.to nap(15)
+    end
+
+    it "naps and updates host entries on ready vms" do
+      hostname = kubernetes_cluster.api_server_lb.hostname
+      api_host = kubernetes_cluster.sshable.host
+      host_line = "#{api_host} #{hostname}"
+      (kubernetes_cluster.nodes + kubernetes_cluster.nodepools.first.nodes).each do |node|
+        expect(node.vm.sshable).to receive(:_cmd).with("uptime").and_return("up 1 day")
+        expect(node.vm.sshable).to receive(:_cmd).with("cat /etc/hosts").and_return("127.0.0.1 localhost")
+        expect(node.vm.sshable).to receive(:_cmd).with("echo #{host_line.shellescape} | sudo tee -a /etc/hosts > /dev/null").and_return("")
+      end
+      expect { kubernetes_test.wait_for_upgrade }.to nap(15)
+    end
+
+    it "fails if some nodes are not upgraded" do
+      kubernetes_cluster.strand.update(label: "wait")
+      kubernetes_cluster.nodepools.each { |np| np.strand.update(label: "wait") }
+      kubernetes_cluster.reload
+
+      nodes_json = {
+        "items" => [
+          {"status" => {"nodeInfo" => {"kubeletVersion" => "#{kubernetes_cluster.version}.1"}}},
+          {"status" => {"nodeInfo" => {"kubeletVersion" => "v1.30.1"}}},
+          {"status" => {"nodeInfo" => {"kubeletVersion" => "#{kubernetes_cluster.version}.1"}}}
+        ]
+      }
+      response = Net::SSH::Connection::Session::StringWithExitstatus.new(JSON.generate(nodes_json), 0)
+      expect(session).to receive(:_exec!).with("sudo kubectl --kubeconfig=/etc/kubernetes/admin.conf get nodes -o json").and_return(response)
+
+      response_raw = Net::SSH::Connection::Session::StringWithExitstatus.new("nodes_raw", 0)
+      expect(session).to receive(:_exec!).with("sudo kubectl --kubeconfig=/etc/kubernetes/admin.conf get nodes").and_return(response_raw)
+
+      expect { kubernetes_test.wait_for_upgrade }.to hop("destroy_kubernetes")
+      expect(kubernetes_test.strand.stack.first["fail_message"]).to eq("Not all 3 nodes upgraded to #{kubernetes_cluster.version}:\nnodes_raw")
+    end
+
+    it "fails if node count is not 3" do
+      kubernetes_cluster.strand.update(label: "wait")
+      kubernetes_cluster.nodepools.each { |np| np.strand.update(label: "wait") }
+      kubernetes_cluster.reload
+
+      nodes_json = {
+        "items" => [
+          {"status" => {"nodeInfo" => {"kubeletVersion" => "#{kubernetes_cluster.version}.1"}}}
+        ]
+      }
+      response = Net::SSH::Connection::Session::StringWithExitstatus.new(JSON.generate(nodes_json), 0)
+      expect(session).to receive(:_exec!).with("sudo kubectl --kubeconfig=/etc/kubernetes/admin.conf get nodes -o json").and_return(response)
+
+      response_raw = Net::SSH::Connection::Session::StringWithExitstatus.new("nodes_raw", 0)
+      expect(session).to receive(:_exec!).with("sudo kubectl --kubeconfig=/etc/kubernetes/admin.conf get nodes").and_return(response_raw)
+
+      expect { kubernetes_test.wait_for_upgrade }.to hop("destroy_kubernetes")
+      expect(kubernetes_test.strand.stack.first["fail_message"]).to eq("Not all 1 nodes upgraded to #{kubernetes_cluster.version}:\nnodes_raw")
+    end
+
+    it "hops to destroy_kubernetes if all 3 nodes are upgraded correctly" do
+      kubernetes_cluster.strand.update(label: "wait")
+      kubernetes_cluster.nodepools.each { |np| np.strand.update(label: "wait") }
+
+      nodes_json = {
+        "items" => [
+          {"status" => {"nodeInfo" => {"kubeletVersion" => "#{kubernetes_cluster.version}.0"}}},
+          {"status" => {"nodeInfo" => {"kubeletVersion" => "#{kubernetes_cluster.version}.0"}}},
+          {"status" => {"nodeInfo" => {"kubeletVersion" => "#{kubernetes_cluster.version}.0"}}}
+        ]
+      }
+      response = Net::SSH::Connection::Session::StringWithExitstatus.new(JSON.generate(nodes_json), 0)
+      expect(session).to receive(:_exec!).with("sudo kubectl --kubeconfig=/etc/kubernetes/admin.conf get nodes -o json").and_return(response)
+
+      expect { kubernetes_test.wait_for_upgrade }.to hop("destroy_kubernetes")
     end
   end
 
