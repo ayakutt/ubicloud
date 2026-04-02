@@ -893,6 +893,81 @@ RSpec.describe Clover, "postgres" do
       end
     end
 
+    describe "log-destination" do
+      it "can create log destination" do
+        visit "#{project.path}#{pg.path}/logs"
+        fill_in "name", with: "graylog"
+        fill_in "host", with: "logs.example.com"
+        fill_in "port", with: "6514"
+        find(".log-destination-create-button").click
+        expect(page.title).to eq "Ubicloud - pg-with-permission"
+        expect(page).to have_flash_notice "Log destination is created"
+        expect(page).to have_content "logs.example.com"
+        ld = pg.reload.log_destinations.first
+        expect(ld.name).to eq "graylog"
+        expect(ld.host).to eq "logs.example.com"
+        expect(ld.port).to eq 6514
+        expect(ld.structured_data).to be_nil
+      end
+
+      it "can create log destination with structured_data" do
+        visit "#{project.path}#{pg.path}/logs"
+        _csrf = all("input[name='_csrf']", visible: false).last.value
+        page.driver.post "#{project.path}#{pg.path}/log-destination", {
+          name: "graylog", host: "logs.example.com", port: "6514",
+          structured_data_ids: ["honeybadger@61642", "honeybadger@61642"],
+          structured_data_keys: ["api_key", "env"],
+          structured_data_values: ["secret", "prod"],
+          _csrf:,
+        }
+        expect(page.status_code).to eq(302)
+        expect(pg.reload.log_destinations.first.structured_data).to eq({"honeybadger@61642" => {"api_key" => "secret", "env" => "prod"}})
+      end
+
+      it "ignores structured_data rows with empty sd_id or key" do
+        visit "#{project.path}#{pg.path}/logs"
+        _csrf = all("input[name='_csrf']", visible: false).last.value
+        page.driver.post "#{project.path}#{pg.path}/log-destination", {
+          name: "graylog", host: "logs.example.com", port: "6514",
+          structured_data_ids: ["", "honeybadger@61642"],
+          structured_data_keys: ["api_key", ""],
+          structured_data_values: ["val1", "val2"],
+          _csrf:,
+        }
+        expect(page.status_code).to eq(302)
+        expect(pg.reload.log_destinations.first.structured_data).to be_nil
+      end
+
+      it "can delete log destination" do
+        ld = PostgresLogDestination.create(
+          postgres_resource_id: pg.id,
+          name: "graylog",
+          host: "logs.example.com",
+          port: 6514,
+        )
+        visit "#{project.path}#{pg.path}/logs"
+
+        find("#ld-delete-#{ld.ubid} .delete-btn").click
+        expect(page).to have_flash_notice("PostgreSQL log destination deleted.")
+        expect(pg.reload.log_destinations.count).to eq(0)
+      end
+
+      it "silently ignores deleting a log destination that does not exist" do
+        ld = PostgresLogDestination.create(
+          postgres_resource_id: pg.id,
+          name: "graylog",
+          host: "logs.example.com",
+          port: 6514,
+        )
+        visit "#{project.path}#{pg.path}/logs"
+        ld.this.update(id: PostgresLogDestination.generate_uuid)
+
+        find("#ld-delete-#{ld.ubid} .delete-btn").click
+        expect(page).to have_flash_notice("PostgreSQL log destination deleted.")
+        expect(pg.reload.log_destinations.count).to eq(1)
+      end
+    end
+
     describe "ca-certificates" do
       it "sets maintenance window to nil when empty string is passed" do
         pg.update(root_cert_1: "a", root_cert_2: "b")

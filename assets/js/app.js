@@ -5,6 +5,7 @@ $(function () {
   setupPlayground();
   setupMetricsCharts();
   setupPgConfigCard();
+  setupStructuredDataCard();
 });
 
 $(".toggle-mobile-menu").on("click", function (event) {
@@ -927,4 +928,64 @@ function setupPgConfigCard() {
 
     $(addBtn).closest(".group").before(newConfigGroup);
   }
+}
+
+function setupStructuredDataCard() {
+  function addKvRow(addBtn) {
+    const newKvRow = $(addBtn).closest(".new-sd-kv-row");
+    const group = $(addBtn).closest(".sd-id-group");
+    const sdId = group.data("sd-id");
+    const keyInput = newKvRow.find(".new-sd-key");
+    const valueInput = newKvRow.find(".new-sd-value");
+    const key = keyInput.val().trim();
+    if (!key) return;
+
+    const placeholder = group.find(".sd-kv-placeholder-row");
+    const newRow = placeholder.clone(true);
+    newRow.find('input[name="structured_data_ids[]"]').val(sdId).prop("disabled", false);
+    newRow.find('input[name="structured_data_keys[]"]').val(key).prop("disabled", false);
+    newRow.find('input[name="structured_data_values[]"]').val(valueInput.val()).prop("disabled", false);
+    newRow.removeClass("sd-kv-placeholder-row hidden").addClass("sd-kv-row");
+
+    group.find(".sd-kv-rows").append(newRow);
+    keyInput.val("");
+    valueInput.val("");
+  }
+
+  $(document).on("click", ".add-sd-id-btn", function (e) {
+    e.preventDefault();
+    const nameInput = $(this).siblings(".new-sd-id-name");
+    const sdId = nameInput.val().trim();
+    if (!sdId) return;
+
+    const placeholder = $(".sd-id-placeholder-group");
+    const newGroup = placeholder.clone(true);
+    newGroup.attr("data-sd-id", sdId);
+    newGroup.find(".sd-id-label").text(sdId);
+    newGroup.removeClass("sd-id-placeholder-group hidden").addClass("sd-id-group");
+
+    placeholder.before(newGroup);
+    nameInput.val("");
+  });
+
+  $(document).on("click", ".add-sd-kv-btn", function (e) {
+    e.preventDefault();
+    addKvRow(this);
+  });
+
+  $(document).on("click", ".delete-sd-id-btn", function (e) {
+    e.preventDefault();
+    $(this).closest(".sd-id-group").remove();
+  });
+
+  $(document).on("click", ".delete-sd-kv-btn", function (e) {
+    e.preventDefault();
+    $(this).closest(".sd-kv-row").remove();
+  });
+
+  $(document).on("submit", "form:has(#sd-id-groups)", function () {
+    $(".sd-id-group .add-sd-kv-btn").each(function () {
+      addKvRow(this);
+    });
+  });
 }
